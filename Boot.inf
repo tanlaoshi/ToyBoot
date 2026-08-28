@@ -30,4 +30,7 @@
   gEfiAcpiTableGuid
 
 [Protocols]
+  gEfiGraphicsOutputProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
   gEfiLoadedImageProtocolGuid
+  gEfiPciIoProtocolGuid

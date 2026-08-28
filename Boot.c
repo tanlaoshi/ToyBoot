@@ -1,6 +1,7 @@
 #include <Uefi.h>
 #include <Guid/Acpi.h>
 #include <Guid/FileInfo.h>
+#include <Protocol/PciIo.h>
 #include <Protocol/GraphicsOutput.h>
 #include <Protocol/SimpleFileSystem.h>
 #include <Protocol/LoadedImage.h>
@@ -48,50 +49,9 @@ typedef struct {
     EFI_PHYSICAL_ADDRESS KernelEntry;
     EFI_PHYSICAL_ADDRESS RsdpAddress;
     EFI_SYSTEM_TABLE     *SystemTable;
+    UINT64               XhciBaseAddress;    // 新增：XHCI MMIO 基址
 } BOOT_CONFIG;
 
-// ============================================================
-//  GetAndSetVideo - 获取并设置视频模式
-// ============================================================
-
-// EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig) {
-//     EFI_STATUS Status;
-//     EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop = NULL;
-//     UINTN HandleCount = 0;
-//     EFI_HANDLE *HandleBuffer = NULL;
-
-//     Status = gBS->LocateHandleBuffer(ByProtocol, &gEfiGraphicsOutputProtocolGuid,
-//                                      NULL, &HandleCount, &HandleBuffer);
-//     if (EFI_ERROR(Status)) return Status;
-
-//     Status = gBS->OpenProtocol(HandleBuffer[0], &gEfiGraphicsOutputProtocolGuid,
-//                                (VOID**)&Gop, ImageHandle, NULL,
-//                                EFI_OPEN_PROTOCOL_GET_PROTOCOL);
-//     if (EFI_ERROR(Status)) return Status;
-
-//     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *ModeInfo = NULL;
-//     UINTN InfoSize = sizeof(EFI_GRAPHICS_OUTPUT_MODE_INFORMATION);
-//     UINTN BestMode = 0, BestPixels = 0;
-
-//     for (UINTN i = 0; i < Gop->Mode->MaxMode; i++) {
-//         Gop->QueryMode(Gop, i, &InfoSize, &ModeInfo);
-//         UINTN Pixels = ModeInfo->HorizontalResolution * ModeInfo->VerticalResolution;
-//         if (Pixels > BestPixels) {
-//             BestPixels = Pixels;
-//             BestMode = i;
-//         }
-//     }
-
-//     Gop->SetMode(Gop, BestMode);
-
-//     VideoConfig->FrameBufferBase = Gop->Mode->FrameBufferBase;
-//     VideoConfig->FrameBufferSize = Gop->Mode->FrameBufferSize;
-//     VideoConfig->HorizontalResolution = Gop->Mode->Info->HorizontalResolution;
-//     VideoConfig->VerticalResolution = Gop->Mode->Info->VerticalResolution;
-//     VideoConfig->PixelsPerScanLine = Gop->Mode->Info->PixelsPerScanLine;
-
-//     return EFI_SUCCESS;
-// }
 EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig) {
     EFI_STATUS Status;
     EFI_GRAPHICS_OUTPUT_PROTOCOL *Gop = NULL;
@@ -295,9 +255,64 @@ EFI_STATUS JumpToKernel(EFI_HANDLE ImageHandle, BOOT_CONFIG *BootConfig) {
     return (EFI_STATUS)KernelEntry(BootConfig);
 }
 
-// ============================================================
-//  入口
-// ============================================================
+EFI_STATUS GetXhciBaseAddress(UINT64 *XhciBase) {
+    EFI_STATUS Status;
+    UINTN HandleCount = 0;
+    EFI_HANDLE *HandleBuffer = NULL;
+
+    Print(L"[Boot] Looking for XHCI...\n");
+
+    Status = gBS->LocateHandleBuffer(ByProtocol, &gEfiPciIoProtocolGuid,
+                                     NULL, &HandleCount, &HandleBuffer);
+    if (EFI_ERROR(Status)) {
+        Print(L"[Boot] LocateHandleBuffer failed: %r\n", Status);
+        return Status;
+    }
+
+    Print(L"[Boot] Found %d PCI devices\n", HandleCount);
+
+    for (UINTN i = 0; i < HandleCount; i++) {
+        EFI_PCI_IO_PROTOCOL *PciIo;
+        Status = gBS->OpenProtocol(HandleBuffer[i], &gEfiPciIoProtocolGuid,
+                                   (VOID**)&PciIo, NULL, NULL,
+                                   EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+        if (EFI_ERROR(Status)) continue;
+
+        UINT32 VendorID;
+        UINT32 DeviceID;
+        UINT32 ClassCode;
+
+        PciIo->Pci.Read(PciIo, EfiPciIoWidthUint32, 0x00, 1, &VendorID);
+        PciIo->Pci.Read(PciIo, EfiPciIoWidthUint32, 0x02, 1, &DeviceID);
+        PciIo->Pci.Read(PciIo, EfiPciIoWidthUint32, 0x08, 1, &ClassCode);
+
+        UINT8 Class = (ClassCode >> 24) & 0xFF;
+        UINT8 Subclass = (ClassCode >> 16) & 0xFF;
+        UINT8 ProgIF = (ClassCode >> 8) & 0xFF;
+
+        Print(L"[Boot] Device %d: VID=0x%04x, DID=0x%04x, Class=0x%02x, Sub=0x%02x, ProgIF=0x%02x\n",
+              i, VendorID & 0xFFFF, (DeviceID >> 16) & 0xFFFF, Class, Subclass, ProgIF);
+
+        if (Class == 0x0C && Subclass == 0x03) {
+            UINT32 Bar0;
+            PciIo->Pci.Read(PciIo, EfiPciIoWidthUint32, 0x10, 1, &Bar0);
+
+            UINT64 Address = Bar0 & 0xFFFFFFF0;
+            if ((Bar0 & 0x6) == 0x4) {
+                UINT32 Bar1;
+                PciIo->Pci.Read(PciIo, EfiPciIoWidthUint32, 0x14, 1, &Bar1);
+                Address |= ((UINT64)Bar1 << 32);
+            }
+
+            Print(L"[Boot] USB Controller found! BAR0=0x%08x, Address=0x%016lx\n", Bar0, Address);
+            *XhciBase = Address;
+            return EFI_SUCCESS;
+        }
+    }
+
+    Print(L"[Boot] No USB Controller found!\n");
+    return EFI_NOT_FOUND;
+}
 
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable) {
     EFI_STATUS Status;
@@ -317,6 +332,17 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     if (EFI_ERROR(Status)) return Status;
 
     BootConfig.SystemTable = SystemTable;
+
+    // 获取 XHCI 基址
+    // 获取 XHCI 基址
+    Print(L"[Boot] Calling GetXhciBaseAddress...\n");
+    if (!EFI_ERROR(GetXhciBaseAddress(&BootConfig.XhciBaseAddress))) {
+        Print(L"[Boot] XHCI Base: 0x%016lx\n", BootConfig.XhciBaseAddress);
+    } else {
+        BootConfig.XhciBaseAddress = 0;
+        Print(L"[Boot] XHCI not found, setting to 0\n");
+    }
+    Print(L"[Boot] BOOT_CONFIG.XhciBaseAddress = 0x%016lx\n", BootConfig.XhciBaseAddress);
 
     return JumpToKernel(ImageHandle, &BootConfig);
 }
