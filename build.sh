@@ -1,9 +1,7 @@
 cd ~/tanlaoshi/edk2
 source edksetup.sh
 
-# 回到 ToyBoot 目录编译
-cd ToyBoot
-build -a X64 -p ToyBoot.dsc -t GCC5
+build -a X64 -p ToyBoot/Boot.dsc -t GCC
 
 if [ -f "Build/ToyBoot/DEBUG_GCC5/FV/ToyBoot.efi" ]; then
     echo ""
