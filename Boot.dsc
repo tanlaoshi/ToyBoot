@@ -6,6 +6,10 @@
   OUTPUT_DIRECTORY               = Build/ToyBoot
   SUPPORTED_ARCHITECTURES        = X64
   BUILD_TARGETS                  = DEBUG|RELEASE
+  #
+  # 调试串口/屏幕 Print：0 关闭，1 开启。命令行：build -D TOY_BOOT_DEBUG=1
+  #
+  DEFINE TOY_BOOT_DEBUG          = 0
 
 [LibraryClasses]
   BaseLib|MdePkg/Library/BaseLib/BaseLib.inf
@@ -22,7 +26,7 @@
   UefiApplicationEntryPoint|MdePkg/Library/UefiApplicationEntryPoint/UefiApplicationEntryPoint.inf
   MemoryAllocationLib|MdePkg/Library/UefiMemoryAllocationLib/UefiMemoryAllocationLib.inf
 [BuildOptions]
-  GCC:*_*_*_CC_FLAGS = -fno-stack-protector
+  GCC:*_*_*_CC_FLAGS = -fno-stack-protector -DTOY_BOOT_DEBUG=$(TOY_BOOT_DEBUG)
 
 [Components]
   ToyBoot/Boot.inf

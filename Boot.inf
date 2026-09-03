@@ -31,6 +31,7 @@
 
 [Protocols]
   gEfiGraphicsOutputProtocolGuid
+  gEfiEdidActiveProtocolGuid
   gEfiSimpleFileSystemProtocolGuid
   gEfiLoadedImageProtocolGuid
   gEfiPciIoProtocolGuid
