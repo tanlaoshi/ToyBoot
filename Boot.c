@@ -574,15 +574,35 @@ EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig) {
     }
 
     /* 已是目标分辨率则勿 SetMode：QEMU+GTK 下改分辨率常会整机再复位一次 */
-    if (Gop->Mode != NULL && Gop->Mode->Info != NULL &&
-        Gop->Mode->Info->HorizontalResolution == BestW &&
-        Gop->Mode->Info->VerticalResolution == BestH) {
-        Print(L"ToyBoot: already %dx%d, skip SetMode\n", BestW, BestH);
-    } else {
-        Status = Gop->SetMode(Gop, BestMode);
-        if (EFI_ERROR(Status)) {
-            Print(L"ToyBoot: SetMode(%d) failed: %r\n", BestMode, Status);
-            return Status;
+    {
+        UINT32 CurW = 0;
+        UINT32 CurH = 0;
+
+        if (Gop->Mode != NULL && Gop->Mode->Info != NULL) {
+            CurW = Gop->Mode->Info->HorizontalResolution;
+            CurH = Gop->Mode->Info->VerticalResolution;
+        }
+
+        if (CurW == BestW && CurH == BestH) {
+            Print(L"ToyBoot: already %dx%d, skip SetMode\n", BestW, BestH);
+        } else if (InVm) {
+            /*
+             * Guest reboot / QEMU Reset 不会重读宿主 run.sh 的 edid；若此处 SetMode
+             * 改分辨率，GTK 跳变会再复位，固件又回到 edid 旧模式 → 无限重启。
+             * 分辨率变更请退出 QEMU 后重新 ./run.sh（会按 THEME.CFG 设 edid）。
+             */
+            Print(L"ToyBoot: skip SetMode %dx%d -> %dx%d on VM (QEMU+GTK loop)\n",
+                  CurW, CurH, BestW, BestH);
+            if (HasCfgTarget && CfgMatched) {
+                Print(L"ToyBoot: THEME.CFG %dx%d — quit QEMU and relaunch ./run.sh\n",
+                      CfgW, CfgH);
+            }
+        } else {
+            Status = Gop->SetMode(Gop, BestMode);
+            if (EFI_ERROR(Status)) {
+                Print(L"ToyBoot: SetMode(%d) failed: %r\n", BestMode, Status);
+                return Status;
+            }
         }
     }
 
