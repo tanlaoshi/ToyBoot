@@ -482,6 +482,8 @@ EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig) {
     UINTN                                 InfoSize = 0;
     UINTN                                 BestMode = 0;
     UINTN                                 BestScore = 0;
+    UINT32                                BestW = 0;
+    UINT32                                BestH = 0;
     BOOLEAN                               InVm = IsVirtualMachine();
     BOOLEAN                               HasEdidTarget = FALSE;
     UINT32                                EdidW = 0;
@@ -552,6 +554,8 @@ EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig) {
             if (Score > BestScore) {
                 BestScore = Score;
                 BestMode = i;
+                BestW = W;
+                BestH = H;
             }
         }
 
@@ -569,10 +573,17 @@ EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig) {
         return EFI_NOT_FOUND;
     }
 
-    Status = Gop->SetMode(Gop, BestMode);
-    if (EFI_ERROR(Status)) {
-        Print(L"ToyBoot: SetMode(%d) failed: %r\n", BestMode, Status);
-        return Status;
+    /* 已是目标分辨率则勿 SetMode：QEMU+GTK 下改分辨率常会整机再复位一次 */
+    if (Gop->Mode != NULL && Gop->Mode->Info != NULL &&
+        Gop->Mode->Info->HorizontalResolution == BestW &&
+        Gop->Mode->Info->VerticalResolution == BestH) {
+        Print(L"ToyBoot: already %dx%d, skip SetMode\n", BestW, BestH);
+    } else {
+        Status = Gop->SetMode(Gop, BestMode);
+        if (EFI_ERROR(Status)) {
+            Print(L"ToyBoot: SetMode(%d) failed: %r\n", BestMode, Status);
+            return Status;
+        }
     }
 
     VideoConfig->FrameBufferBase = Gop->Mode->FrameBufferBase;
