@@ -589,12 +589,12 @@ EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig) {
             /*
              * Guest reboot / QEMU Reset 不会重读宿主 run.sh 的 edid；若此处 SetMode
              * 改分辨率，GTK 跳变会再复位，固件又回到 edid 旧模式 → 无限重启。
-             * 分辨率变更请退出 QEMU 后重新 ./run.sh（会按 THEME.CFG 设 edid）。
+             * 分辨率变更请退出 QEMU 后重新 ./run-split.sh（会按 rootfs THEME.CFG 设 edid）。
              */
             Print(L"ToyBoot: skip SetMode %dx%d -> %dx%d on VM (QEMU+GTK loop)\n",
                   CurW, CurH, BestW, BestH);
             if (HasCfgTarget && CfgMatched) {
-                Print(L"ToyBoot: THEME.CFG %dx%d — quit QEMU and relaunch ./run.sh\n",
+                Print(L"ToyBoot: THEME.CFG %dx%d — quit QEMU and relaunch ./run-split.sh\n",
                       CfgW, CfgH);
             }
         } else {
@@ -715,6 +715,7 @@ EFI_STATUS ReadKernelFile(EFI_HANDLE ImageHandle, EFI_PHYSICAL_ADDRESS *OutBuffe
     UINTN HandleCount = 0;
     EFI_HANDLE *Handles = NULL;
     UINTN i;
+    UINTN Pass;
 
     Status = gBS->HandleProtocol(ImageHandle, &gEfiLoadedImageProtocolGuid,
                                  (VOID **)&LoadedImage);
@@ -722,43 +723,63 @@ EFI_STATUS ReadKernelFile(EFI_HANDLE ImageHandle, EFI_PHYSICAL_ADDRESS *OutBuffe
         return Status;
     }
 
-    /* 1) 与 BOOTX64.EFI 同卷 */
-    Status = gBS->HandleProtocol(LoadedImage->DeviceHandle,
-                                 &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs);
-    if (!EFI_ERROR(Status)) {
-        Status = OpenKernelOnFs(Fs, OutBuffer);
-        if (!EFI_ERROR(Status)) {
-            Print(L"ToyBoot: Kernel.elf from boot volume\n");
-            return EFI_SUCCESS;
-        }
-    }
-
-    /* 2) 枚举其它 FAT 卷（独立 TOYOS 分区） */
     Status = gBS->LocateHandleBuffer(ByProtocol, &gEfiSimpleFileSystemProtocolGuid,
                                      NULL, &HandleCount, &Handles);
     if (EFI_ERROR(Status)) {
-        Print(L"ToyBoot: Kernel.elf not found\n");
-        return EFI_NOT_FOUND;
+        Handles = NULL;
+        HandleCount = 0;
     }
 
-    for (i = 0; i < HandleCount; i++) {
-        if (Handles[i] == LoadedImage->DeviceHandle) {
-            continue;
-        }
-        Status = gBS->HandleProtocol(Handles[i], &gEfiSimpleFileSystemProtocolGuid,
-                                     (VOID **)&Fs);
-        if (EFI_ERROR(Status)) {
-            continue;
-        }
-        Status = OpenKernelOnFs(Fs, OutBuffer);
-        if (!EFI_ERROR(Status)) {
-            Print(L"ToyBoot: Kernel.elf from secondary volume\n");
-            gBS->FreePool(Handles);
-            return EFI_SUCCESS;
+    /*
+     * 双盘布局：必须先读带 TOYOS.ID 的系统盘（disk1/rootfs），避免启动盘旧
+     * Kernel.elf 抢先加载。Pass0=TOYOS；Pass1=其它非启动卷；Pass2=启动卷兜底。
+     */
+    for (Pass = 0; Pass < 3; Pass++) {
+        for (i = 0; i < HandleCount; i++) {
+            BOOLEAN IsBoot = (Handles[i] == LoadedImage->DeviceHandle);
+            BOOLEAN IsToyOs;
+
+            Status = gBS->HandleProtocol(Handles[i], &gEfiSimpleFileSystemProtocolGuid,
+                                         (VOID **)&Fs);
+            if (EFI_ERROR(Status)) {
+                continue;
+            }
+            IsToyOs = FsHasToyOsId(Fs);
+            if (Pass == 0) {
+                if (!IsToyOs) {
+                    continue;
+                }
+            } else if (Pass == 1) {
+                /* 非启动盘；含 TOYOS.ID 误判失败时的 rootfs 兜底 */
+                if (IsBoot) {
+                    continue;
+                }
+            } else {
+                if (!IsBoot) {
+                    continue;
+                }
+            }
+
+            Status = OpenKernelOnFs(Fs, OutBuffer);
+            if (!EFI_ERROR(Status)) {
+                if (Pass == 0) {
+                    Print(L"ToyBoot: Kernel.elf from TOYOS volume\n");
+                } else if (Pass == 1) {
+                    Print(L"ToyBoot: Kernel.elf from secondary volume\n");
+                } else {
+                    Print(L"ToyBoot: Kernel.elf from boot volume\n");
+                }
+                if (Handles != NULL) {
+                    gBS->FreePool(Handles);
+                }
+                return EFI_SUCCESS;
+            }
         }
     }
 
-    gBS->FreePool(Handles);
+    if (Handles != NULL) {
+        gBS->FreePool(Handles);
+    }
     Print(L"ToyBoot: Kernel.elf not found on any volume\n");
     return EFI_NOT_FOUND;
 }

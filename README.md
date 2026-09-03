@@ -4,15 +4,17 @@ A minimal UEFI bootloader that loads ELF kernels with GOP graphics support.
 
 ## Features
 - GOP graphics mode selection (QEMU-friendly table / real-hardware EDID)
-- ELF64 kernel loading from boot volume or another FAT volume (`Kernel.elf`)
+- ELF64 kernel loading：**优先 TOYOS 卷**（`TOYOS.ID` + `Kernel.elf`），启动盘仅作兜底
 - UEFI memory map / ACPI RSDP / XHCI BAR handoff
 
 ## Layout (third OS)
 
 ```
-ESP (FAT):     EFI/ToyOS/BOOTX64.EFI   <- GRUB chainloads this
-TOYOS (FAT):   Kernel.elf, HELLO.ELF   <- ToyBoot + kernel read here
+ESP (FAT):     EFI/BOOT/BOOTX64.EFI   <- UEFI / GRUB 加载
+TOYOS (FAT):   TOYOS.ID, Kernel.elf, THEME.CFG, HELLO.ELF, ...
 ```
+
+QEMU：`ToyImage/run-split.sh`（盘0=ESP，盘1=`rootfs/`）。
 
 GRUB example:
 
