@@ -26,7 +26,7 @@
   UefiApplicationEntryPoint|MdePkg/Library/UefiApplicationEntryPoint/UefiApplicationEntryPoint.inf
   MemoryAllocationLib|MdePkg/Library/UefiMemoryAllocationLib/UefiMemoryAllocationLib.inf
 [BuildOptions]
-  GCC:*_*_*_CC_FLAGS = -fno-stack-protector -DTOY_BOOT_DEBUG=$(TOY_BOOT_DEBUG)
+  GCC:*_*_*_CC_FLAGS = -fno-stack-protector -DTOY_BOOT_DEBUG=$(TOY_BOOT_DEBUG) -I$(WORKSPACE)/ToyKernel/HAL/X86_64
 
 [Components]
   ToyBoot/Boot.inf

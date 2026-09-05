@@ -12,6 +12,8 @@
 #include <Library/BaseMemoryLib.h>
 #include <Library/BaseLib.h>
 
+#include "BootHandoff.h"
+
 /*
  * 调试输出开关：默认关闭。
  * 开启：./build.sh DEBUG=1  或  build -D TOY_BOOT_DEBUG=1
@@ -27,6 +29,11 @@
 #endif
 
 #define PT_LOAD 1
+#define EM_X86_64 0x3E
+
+typedef TOY_BOOT_CONFIG  BOOT_CONFIG;
+typedef TOY_VIDEO_CONFIG VIDEO_CONFIG;
+typedef TOY_MEMORY_MAP   MEMORY_MAP;
 
 #pragma pack(1)
 typedef struct {
@@ -42,31 +49,6 @@ typedef struct {
     UINT64 SizeInFile; UINT64 SizeInMemory; UINT64 Align;
 } PROGRAM_HEADER_64;
 #pragma pack()
-
-typedef struct {
-    EFI_PHYSICAL_ADDRESS FrameBufferBase;
-    UINTN                FrameBufferSize;
-    UINT32               HorizontalResolution;
-    UINT32               VerticalResolution;
-    UINT32               PixelsPerScanLine;
-} VIDEO_CONFIG;
-
-typedef struct {
-    VOID   *Buffer;
-    UINTN  MapSize;
-    UINTN  MapKey;
-    UINTN  DescriptorSize;
-    UINT32 DescriptorVersion;
-} MEMORY_MAP;
-
-typedef struct {
-    VIDEO_CONFIG         VideoConfig;
-    MEMORY_MAP           MemoryMap;
-    EFI_PHYSICAL_ADDRESS KernelEntry;
-    EFI_PHYSICAL_ADDRESS RsdpAddress;
-    EFI_SYSTEM_TABLE     *SystemTable;
-    UINT64               XhciBaseAddress;    // 新增：XHCI MMIO 基址
-} BOOT_CONFIG;
 
 /* 虚拟机（QEMU/KVM 等）上保持窗口友好的分辨率表；真机走 EDID/最大模式 */
 STATIC BOOLEAN IsVirtualMachine(VOID) {
@@ -473,7 +455,7 @@ STATIC BOOLEAN TryLoadDisplayPref(EFI_HANDLE ImageHandle, UINT32 *OutW,
     return FALSE;
 }
 
-EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig) {
+STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig) {
     EFI_STATUS                            Status;
     EFI_GRAPHICS_OUTPUT_PROTOCOL          *Gop = NULL;
     UINTN                                 HandleCount = 0;
@@ -640,7 +622,7 @@ EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig) {
 // ============================================================
 
 STATIC EFI_STATUS OpenKernelOnFs(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs,
-                                 EFI_PHYSICAL_ADDRESS *OutBuffer) {
+                                 EFI_PHYSICAL_ADDRESS *OutBuffer, UINTN *OutSize) {
     STATIC CHAR16 *Paths[] = {
         L"\\Kernel.elf",
         L"\\KERNEL.ELF",
@@ -652,6 +634,10 @@ STATIC EFI_STATUS OpenKernelOnFs(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs,
     EFI_FILE_INFO *FileInfo = NULL;
     UINTN InfoSize;
     UINTN p;
+
+    if (OutSize != NULL) {
+        *OutSize = 0;
+    }
 
     Status = Fs->OpenVolume(Fs, &Root);
     if (EFI_ERROR(Status)) {
@@ -687,7 +673,7 @@ STATIC EFI_STATUS OpenKernelOnFs(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs,
     }
 
     {
-        UINTN FilePageSize = (FileInfo->FileSize >> 12) + 1;
+        UINTN FilePageSize = ((UINTN)FileInfo->FileSize >> 12) + 1;
         Status = gBS->AllocatePages(AllocateAnyPages, EfiLoaderData, FilePageSize, OutBuffer);
         if (EFI_ERROR(Status)) {
             gBS->FreePool(FileInfo);
@@ -697,8 +683,11 @@ STATIC EFI_STATUS OpenKernelOnFs(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs,
         }
 
         {
-            UINTN ReadSize = FileInfo->FileSize;
+            UINTN ReadSize = (UINTN)FileInfo->FileSize;
             Status = File->Read(File, &ReadSize, (VOID *)(UINTN)*OutBuffer);
+            if (!EFI_ERROR(Status) && OutSize != NULL) {
+                *OutSize = ReadSize;
+            }
         }
     }
 
@@ -708,7 +697,8 @@ STATIC EFI_STATUS OpenKernelOnFs(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs,
     return Status;
 }
 
-EFI_STATUS ReadKernelFile(EFI_HANDLE ImageHandle, EFI_PHYSICAL_ADDRESS *OutBuffer) {
+STATIC EFI_STATUS ReadKernelFile(EFI_HANDLE ImageHandle, EFI_PHYSICAL_ADDRESS *OutBuffer,
+                                 UINTN *OutSize) {
     EFI_STATUS Status;
     EFI_LOADED_IMAGE_PROTOCOL *LoadedImage = NULL;
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs = NULL;
@@ -716,6 +706,10 @@ EFI_STATUS ReadKernelFile(EFI_HANDLE ImageHandle, EFI_PHYSICAL_ADDRESS *OutBuffe
     EFI_HANDLE *Handles = NULL;
     UINTN i;
     UINTN Pass;
+
+    if (OutSize != NULL) {
+        *OutSize = 0;
+    }
 
     Status = gBS->HandleProtocol(ImageHandle, &gEfiLoadedImageProtocolGuid,
                                  (VOID **)&LoadedImage);
@@ -750,7 +744,6 @@ EFI_STATUS ReadKernelFile(EFI_HANDLE ImageHandle, EFI_PHYSICAL_ADDRESS *OutBuffe
                     continue;
                 }
             } else if (Pass == 1) {
-                /* 非启动盘；含 TOYOS.ID 误判失败时的 rootfs 兜底 */
                 if (IsBoot) {
                     continue;
                 }
@@ -760,7 +753,7 @@ EFI_STATUS ReadKernelFile(EFI_HANDLE ImageHandle, EFI_PHYSICAL_ADDRESS *OutBuffe
                 }
             }
 
-            Status = OpenKernelOnFs(Fs, OutBuffer);
+            Status = OpenKernelOnFs(Fs, OutBuffer, OutSize);
             if (!EFI_ERROR(Status)) {
                 if (Pass == 0) {
                     Print(L"ToyBoot: Kernel.elf from TOYOS volume\n");
@@ -788,45 +781,103 @@ EFI_STATUS ReadKernelFile(EFI_HANDLE ImageHandle, EFI_PHYSICAL_ADDRESS *OutBuffe
 //  CheckAndLoadKernel - 检查 ELF 格式并加载段
 // ============================================================
 
-EFI_STATUS CheckAndLoadKernel(EFI_PHYSICAL_ADDRESS ElfBase, EFI_PHYSICAL_ADDRESS *EntryPoint) {
-    if (*(UINT32*)ElfBase != 0x464C457F || *(UINT8*)(ElfBase + 4) != 2) {
+STATIC EFI_STATUS CheckAndLoadKernel(EFI_PHYSICAL_ADDRESS ElfBase, UINTN FileSize,
+                                      EFI_PHYSICAL_ADDRESS *EntryPoint) {
+    ELF_HEADER_64 *Hdr;
+    PROGRAM_HEADER_64 *PHead;
+    EFI_PHYSICAL_ADDRESS Low = 0xFFFFFFFFFFFFFFFFULL;
+    EFI_PHYSICAL_ADDRESS High = 0;
+    UINTN i;
+    UINTN PageCount;
+    EFI_PHYSICAL_ADDRESS LoadBase;
+    EFI_STATUS Status;
+    UINT64 PhEnd;
+
+    if (FileSize < sizeof(ELF_HEADER_64)) {
+        return EFI_UNSUPPORTED;
+    }
+    if (*(UINT32 *)(UINTN)ElfBase != 0x464C457FU || *(UINT8 *)(UINTN)(ElfBase + 4) != 2) {
         return EFI_UNSUPPORTED;
     }
 
-    ELF_HEADER_64 *Hdr = (ELF_HEADER_64*)ElfBase;
-    PROGRAM_HEADER_64 *PHead = (PROGRAM_HEADER_64*)(ElfBase + Hdr->Phoff);
-
-    EFI_PHYSICAL_ADDRESS Low = 0xFFFFFFFFFFFFFFFF;
-    EFI_PHYSICAL_ADDRESS High = 0;
-
-    for (UINTN i = 0; i < Hdr->PHeadCount; i++) {
-        if (PHead[i].Type == PT_LOAD) {
-            if (Low > PHead[i].PAddress) Low = PHead[i].PAddress;
-            if (High < PHead[i].PAddress + PHead[i].SizeInMemory)
-                High = PHead[i].PAddress + PHead[i].SizeInMemory;
-        }
+    Hdr = (ELF_HEADER_64 *)(UINTN)ElfBase;
+    if (Hdr->Machine != EM_X86_64) {
+        Print(L"ToyBoot: bad ELF machine 0x%x\n", Hdr->Machine);
+        return EFI_UNSUPPORTED;
+    }
+    if (Hdr->PHeadSize < sizeof(PROGRAM_HEADER_64) || Hdr->PHeadCount == 0) {
+        return EFI_UNSUPPORTED;
+    }
+    if (Hdr->Phoff >= FileSize) {
+        return EFI_UNSUPPORTED;
+    }
+    PhEnd = Hdr->Phoff + (UINT64)Hdr->PHeadCount * (UINT64)Hdr->PHeadSize;
+    if (PhEnd > FileSize || PhEnd < Hdr->Phoff) {
+        return EFI_UNSUPPORTED;
     }
 
-    // Kernel.elf 链接在 0x100000，且以 -fno-pie 编译，必须按 PhysAddr 固定加载，
-    // 不能 AllocateAnyPages 再重定位，否则跳转后立刻挂死。
-    UINTN PageCount = ((High - Low) >> 12) + 1;
-    EFI_PHYSICAL_ADDRESS LoadBase = Low;
-    EFI_STATUS Status = gBS->AllocatePages(AllocateAddress, EfiLoaderCode, PageCount, &LoadBase);
+    PHead = (PROGRAM_HEADER_64 *)(UINTN)(ElfBase + Hdr->Phoff);
+    for (i = 0; i < Hdr->PHeadCount; i++) {
+        PROGRAM_HEADER_64 *Ph = (PROGRAM_HEADER_64 *)((UINT8 *)PHead + i * Hdr->PHeadSize);
+        UINT64 SegEnd;
+
+        if (Ph->Type != PT_LOAD) {
+            continue;
+        }
+        if (Ph->Offset >= FileSize || Ph->SizeInFile > FileSize - Ph->Offset) {
+            Print(L"ToyBoot: PT_LOAD out of file\n");
+            return EFI_UNSUPPORTED;
+        }
+        SegEnd = Ph->PAddress + Ph->SizeInMemory;
+        if (SegEnd < Ph->PAddress) {
+            Print(L"ToyBoot: PT_LOAD address wrap\n");
+            return EFI_UNSUPPORTED;
+        }
+        if (Low > Ph->PAddress) {
+            Low = Ph->PAddress;
+        }
+        if (High < SegEnd) {
+            High = SegEnd;
+        }
+    }
+    if (High <= Low) {
+        return EFI_UNSUPPORTED;
+    }
+
+    /* Kernel.elf @0x100000，-fno-pie：必须按 PhysAddr 固定加载 */
+    {
+        UINT64 Span = High - Low;
+
+        /* ceil(Span/4096)；防 Span 过大导致 PageCount 回绕 */
+        if (Span > (~(UINT64)0 - 0xFFFULL)) {
+            Print(L"ToyBoot: page count wrap\n");
+            return EFI_UNSUPPORTED;
+        }
+        PageCount = (UINTN)((Span + 0xFFFULL) >> 12);
+        if (PageCount == 0 || (UINT64)PageCount != ((Span + 0xFFFULL) >> 12)) {
+            Print(L"ToyBoot: page count wrap\n");
+            return EFI_UNSUPPORTED;
+        }
+    }
+    LoadBase = Low;
+    Status = gBS->AllocatePages(AllocateAddress, EfiLoaderCode, PageCount, &LoadBase);
     if (EFI_ERROR(Status)) {
         Print(L"AllocatePages(0x%lx, %lu pages) failed: %r\n", Low, PageCount, Status);
         return Status;
     }
 
-    SetMem((VOID*)LoadBase, PageCount * 4096, 0);
+    SetMem((VOID *)(UINTN)LoadBase, PageCount * 4096, 0);
 
-    for (UINTN i = 0; i < Hdr->PHeadCount; i++) {
-        if (PHead[i].Type == PT_LOAD) {
-            CopyMem((VOID*)(UINTN)PHead[i].PAddress,
-                    (VOID*)(ElfBase + PHead[i].Offset), PHead[i].SizeInFile);
-            if (PHead[i].SizeInMemory > PHead[i].SizeInFile) {
-                SetMem((VOID*)(UINTN)(PHead[i].PAddress + PHead[i].SizeInFile),
-                       PHead[i].SizeInMemory - PHead[i].SizeInFile, 0);
-            }
+    for (i = 0; i < Hdr->PHeadCount; i++) {
+        PROGRAM_HEADER_64 *Ph = (PROGRAM_HEADER_64 *)((UINT8 *)PHead + i * Hdr->PHeadSize);
+        if (Ph->Type != PT_LOAD) {
+            continue;
+        }
+        CopyMem((VOID *)(UINTN)Ph->PAddress,
+                (VOID *)(UINTN)(ElfBase + Ph->Offset), (UINTN)Ph->SizeInFile);
+        if (Ph->SizeInMemory > Ph->SizeInFile) {
+            SetMem((VOID *)(UINTN)(Ph->PAddress + Ph->SizeInFile),
+                   (UINTN)(Ph->SizeInMemory - Ph->SizeInFile), 0);
         }
     }
 
@@ -839,7 +890,7 @@ EFI_STATUS CheckAndLoadKernel(EFI_PHYSICAL_ADDRESS ElfBase, EFI_PHYSICAL_ADDRESS
 //  GetRsdpAddress - 获取 ACPI RSDP 表地址
 // ============================================================
 
-EFI_STATUS GetRsdpAddress(EFI_PHYSICAL_ADDRESS *RsdpAddress) {
+STATIC EFI_STATUS GetRsdpAddress(EFI_PHYSICAL_ADDRESS *RsdpAddress) {
     EFI_STATUS Status;
 
     Status = EfiGetSystemConfigurationTable(&gEfiAcpiTableGuid, (VOID**)RsdpAddress);
@@ -853,45 +904,68 @@ EFI_STATUS GetRsdpAddress(EFI_PHYSICAL_ADDRESS *RsdpAddress) {
 //  JumpToKernel - 获取内存映射，退出 Boot Services，跳转
 // ============================================================
 
-EFI_STATUS JumpToKernel(EFI_HANDLE ImageHandle, BOOT_CONFIG *BootConfig) {
+STATIC EFI_STATUS JumpToKernel(EFI_HANDLE ImageHandle, BOOT_CONFIG *BootConfig) {
     EFI_STATUS Status;
     MEMORY_MAP MemoryMap = {NULL, 0, 0, 0, 0};
     UINTN MapKey = 0;
+    UINTN Tries;
+    UINTN Needed;
 
-    // 1. 第一次调用：获取所需大小
     Status = gBS->GetMemoryMap(&MemoryMap.MapSize, NULL, &MapKey,
                                &MemoryMap.DescriptorSize, &MemoryMap.DescriptorVersion);
-    if (Status != EFI_BUFFER_TOO_SMALL) return Status;
-
-    // 2. 分配足够的缓冲区（多加几个描述符的空间，防止在分配期间内存映射变化）
-    MemoryMap.MapSize += MemoryMap.DescriptorSize * 8;
-    Status = gBS->AllocatePool(EfiLoaderData, MemoryMap.MapSize, &MemoryMap.Buffer);
-    if (EFI_ERROR(Status)) return Status;
-
-    // 3. 第二次调用：获取实际内存映射
-    Status = gBS->GetMemoryMap(&MemoryMap.MapSize, (EFI_MEMORY_DESCRIPTOR*)MemoryMap.Buffer,
-                               &MapKey, &MemoryMap.DescriptorSize,
-                               &MemoryMap.DescriptorVersion);
-    if (EFI_ERROR(Status)) return Status;
-
-    // 4. 退出 Boot Services
-    Status = gBS->ExitBootServices(ImageHandle, MapKey);
-    if (EFI_ERROR(Status)) {
-        Print(L"ExitBootServices failed: %r\n", Status);
+    if (Status != EFI_BUFFER_TOO_SMALL) {
         return Status;
     }
 
-    BootConfig->MemoryMap = MemoryMap;
+    MemoryMap.MapSize += MemoryMap.DescriptorSize * 16;
+    Status = gBS->AllocatePool(EfiLoaderData, MemoryMap.MapSize, &MemoryMap.Buffer);
+    if (EFI_ERROR(Status)) {
+        return Status;
+    }
 
-    // 5. 跳转到内核
-    UINT64 (*KernelEntry)(BOOT_CONFIG*) = (UINT64 (*)(BOOT_CONFIG*))BootConfig->KernelEntry;
-    return (EFI_STATUS)KernelEntry(BootConfig);
+    /* ExitBootServices 常因 map 变更失败；重取 map 后重试 */
+    for (Tries = 0; Tries < 8; Tries++) {
+        Needed = MemoryMap.MapSize;
+        Status = gBS->GetMemoryMap(&Needed, (EFI_MEMORY_DESCRIPTOR *)MemoryMap.Buffer,
+                                   &MapKey, &MemoryMap.DescriptorSize,
+                                   &MemoryMap.DescriptorVersion);
+        if (Status == EFI_BUFFER_TOO_SMALL) {
+            gBS->FreePool(MemoryMap.Buffer);
+            MemoryMap.MapSize = Needed + MemoryMap.DescriptorSize * 16;
+            Status = gBS->AllocatePool(EfiLoaderData, MemoryMap.MapSize, &MemoryMap.Buffer);
+            if (EFI_ERROR(Status)) {
+                return Status;
+            }
+            continue;
+        }
+        if (EFI_ERROR(Status)) {
+            gBS->FreePool(MemoryMap.Buffer);
+            return Status;
+        }
+        MemoryMap.MapSize = Needed;
+
+        Status = gBS->ExitBootServices(ImageHandle, MapKey);
+        if (!EFI_ERROR(Status)) {
+            BootConfig->MemoryMap = MemoryMap;
+            {
+                UINT64 (*KernelEntry)(BOOT_CONFIG *) =
+                    (UINT64 (*)(BOOT_CONFIG *))(UINTN)BootConfig->KernelEntry;
+                return (EFI_STATUS)KernelEntry(BootConfig);
+            }
+        }
+        /* 失败则下一轮重新 GetMemoryMap（仍可调用 Boot Services） */
+    }
+
+    Print(L"ExitBootServices failed after retries: %r\n", Status);
+    gBS->FreePool(MemoryMap.Buffer);
+    return Status;
 }
 
-EFI_STATUS GetXhciBaseAddress(UINT64 *XhciBase) {
+STATIC EFI_STATUS GetXhciBaseAddress(UINT64 *XhciBase) {
     EFI_STATUS Status;
     UINTN HandleCount = 0;
     EFI_HANDLE *HandleBuffer = NULL;
+    UINTN i;
 
     BootDbg(L"[Boot] Looking for XHCI...\n");
 
@@ -904,24 +978,29 @@ EFI_STATUS GetXhciBaseAddress(UINT64 *XhciBase) {
 
     BootDbg(L"[Boot] Found %d PCI devices\n", HandleCount);
 
-    for (UINTN i = 0; i < HandleCount; i++) {
+    for (i = 0; i < HandleCount; i++) {
         EFI_PCI_IO_PROTOCOL *PciIo;
-        Status = gBS->OpenProtocol(HandleBuffer[i], &gEfiPciIoProtocolGuid,
-                                   (VOID**)&PciIo, NULL, NULL,
-                                   EFI_OPEN_PROTOCOL_GET_PROTOCOL);
-        if (EFI_ERROR(Status)) continue;
-
         UINT32 VendorID;
         UINT32 DeviceID;
         UINT32 ClassCode;
+        UINT8 Class;
+        UINT8 Subclass;
+        UINT8 ProgIF;
+
+        Status = gBS->OpenProtocol(HandleBuffer[i], &gEfiPciIoProtocolGuid,
+                                   (VOID **)&PciIo, NULL, NULL,
+                                   EFI_OPEN_PROTOCOL_GET_PROTOCOL);
+        if (EFI_ERROR(Status)) {
+            continue;
+        }
 
         PciIo->Pci.Read(PciIo, EfiPciIoWidthUint32, 0x00, 1, &VendorID);
         PciIo->Pci.Read(PciIo, EfiPciIoWidthUint32, 0x02, 1, &DeviceID);
         PciIo->Pci.Read(PciIo, EfiPciIoWidthUint32, 0x08, 1, &ClassCode);
 
-        UINT8 Class = (ClassCode >> 24) & 0xFF;
-        UINT8 Subclass = (ClassCode >> 16) & 0xFF;
-        UINT8 ProgIF = (ClassCode >> 8) & 0xFF;
+        Class = (UINT8)((ClassCode >> 24) & 0xFF);
+        Subclass = (UINT8)((ClassCode >> 16) & 0xFF);
+        ProgIF = (UINT8)((ClassCode >> 8) & 0xFF);
 
 #if TOY_BOOT_DEBUG
         BootDbg(L"[Boot] Device %d: VID=0x%04x, DID=0x%04x, Class=0x%02x, Sub=0x%02x, ProgIF=0x%02x\n",
@@ -929,27 +1008,30 @@ EFI_STATUS GetXhciBaseAddress(UINT64 *XhciBase) {
 #else
         (void)VendorID;
         (void)DeviceID;
-        (void)ProgIF;
 #endif
 
-        if (Class == 0x0C && Subclass == 0x03) {
+        /* XHCI = USB serial bus class, xHCI ProgIF 0x30 */
+        if (Class == 0x0C && Subclass == 0x03 && ProgIF == 0x30) {
             UINT32 Bar0;
-            PciIo->Pci.Read(PciIo, EfiPciIoWidthUint32, 0x10, 1, &Bar0);
+            UINT64 Address;
 
-            UINT64 Address = Bar0 & 0xFFFFFFF0;
+            PciIo->Pci.Read(PciIo, EfiPciIoWidthUint32, 0x10, 1, &Bar0);
+            Address = Bar0 & 0xFFFFFFF0U;
             if ((Bar0 & 0x6) == 0x4) {
                 UINT32 Bar1;
                 PciIo->Pci.Read(PciIo, EfiPciIoWidthUint32, 0x14, 1, &Bar1);
                 Address |= ((UINT64)Bar1 << 32);
             }
 
-            BootDbg(L"[Boot] USB Controller found! BAR0=0x%08x, Address=0x%016lx\n", Bar0, Address);
+            BootDbg(L"[Boot] XHCI found! BAR0=0x%08x, Address=0x%016lx\n", Bar0, Address);
             *XhciBase = Address;
+            gBS->FreePool(HandleBuffer);
             return EFI_SUCCESS;
         }
     }
 
-    BootDbg(L"[Boot] No USB Controller found!\n");
+    BootDbg(L"[Boot] No XHCI Controller found!\n");
+    gBS->FreePool(HandleBuffer);
     return EFI_NOT_FOUND;
 }
 
@@ -961,11 +1043,14 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     Status = GetAndSetVideo(ImageHandle, &BootConfig.VideoConfig);
     if (EFI_ERROR(Status)) return Status;
 
-    Status = ReadKernelFile(ImageHandle, &ElfBuffer);
-    if (EFI_ERROR(Status)) return Status;
+    {
+        UINTN ElfSize = 0;
+        Status = ReadKernelFile(ImageHandle, &ElfBuffer, &ElfSize);
+        if (EFI_ERROR(Status)) return Status;
 
-    Status = CheckAndLoadKernel(ElfBuffer, &BootConfig.KernelEntry);
-    if (EFI_ERROR(Status)) return Status;
+        Status = CheckAndLoadKernel(ElfBuffer, ElfSize, &BootConfig.KernelEntry);
+        if (EFI_ERROR(Status)) return Status;
+    }
 
     Status = GetRsdpAddress(&BootConfig.RsdpAddress);
     if (EFI_ERROR(Status)) return Status;
