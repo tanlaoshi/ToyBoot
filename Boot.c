@@ -948,9 +948,22 @@ STATIC EFI_STATUS JumpToKernel(EFI_HANDLE ImageHandle, BOOT_CONFIG *BootConfig) 
         if (!EFI_ERROR(Status)) {
             BootConfig->MemoryMap = MemoryMap;
             {
-                UINT64 (*KernelEntry)(BOOT_CONFIG *) =
-                    (UINT64 (*)(BOOT_CONFIG *))(UINTN)BootConfig->KernelEntry;
-                return (EFI_STATUS)KernelEntry(BootConfig);
+                UINT64 Entry = BootConfig->KernelEntry;
+                BOOT_CONFIG *Cfg = BootConfig;
+
+                /*
+                 * 不再经 C 函数指针调用：MSVC/UEFI ABI 把首参放 RCX，
+                 * 而 freestanding 内核按 SysV 读 RDI。两边都写入后 jmp。
+                 */
+                __asm__ volatile(
+                    "cli\n\t"
+                    "mov %[cfg], %%rdi\n\t"
+                    "mov %[cfg], %%rcx\n\t"
+                    "jmp *%[entry]"
+                    :
+                    : [cfg] "r"(Cfg), [entry] "r"(Entry)
+                    : "rdi", "rcx", "memory", "cc");
+                __builtin_unreachable();
             }
         }
         /* 失败则下一轮重新 GetMemoryMap（仍可调用 Boot Services） */
@@ -1048,12 +1061,17 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
         Status = ReadKernelFile(ImageHandle, &ElfBuffer, &ElfSize);
         if (EFI_ERROR(Status)) return Status;
 
+        Print(L"ToyBoot: loading kernel ELF...\n");
         Status = CheckAndLoadKernel(ElfBuffer, ElfSize, &BootConfig.KernelEntry);
         if (EFI_ERROR(Status)) return Status;
+        Print(L"ToyBoot: kernel loaded, entry 0x%lx\n", BootConfig.KernelEntry);
     }
 
     Status = GetRsdpAddress(&BootConfig.RsdpAddress);
-    if (EFI_ERROR(Status)) return Status;
+    if (EFI_ERROR(Status)) {
+        Print(L"ToyBoot: ACPI RSDP not found (continue)\n");
+        BootConfig.RsdpAddress = 0;
+    }
 
     BootConfig.SystemTable = SystemTable;
 
@@ -1065,7 +1083,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
         BootDbg(L"[Boot] XHCI not found, setting to 0\n");
     }
     BootDbg(L"[Boot] BOOT_CONFIG.XhciBaseAddress = 0x%016lx\n", BootConfig.XhciBaseAddress);
-    BootDbg(L"[Boot] Jumping to kernel entry 0x%lx\n", BootConfig.KernelEntry);
+    Print(L"ToyBoot: ExitBootServices + jump 0x%lx\n", BootConfig.KernelEntry);
 
     return JumpToKernel(ImageHandle, &BootConfig);
 }
