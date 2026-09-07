@@ -52,3 +52,10 @@ Known gaps (storage / keyboard / no COM1 / NIC) and per-machine notes:
 → roadmap **1.3c** (`Documents/路线图.md`)
 
 Do **not** mix Duo S / Board-package work (**1.3b**) into ToyBoot PRs.
+
+## Docs
+
+- Kernel build/run: [`../ToyKernel/README.md`](../ToyKernel/README.md)
+- Progress / plans: [`../ToyKernel/Documents/路线图.md`](../ToyKernel/Documents/路线图.md)
+- Architecture / UEFI-PC: [`../ToyKernel/Documents/技术手册.md`](../ToyKernel/Documents/技术手册.md)（Boot / 真机章节）；本机笔记 [`../ToyKernel/HAL/X64/NOTES-UEFI-PC.md`](../ToyKernel/HAL/X64/NOTES-UEFI-PC.md)
+
