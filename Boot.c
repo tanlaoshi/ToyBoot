@@ -575,9 +575,10 @@ STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConf
              */
             Print(L"ToyBoot: skip SetMode %dx%d -> %dx%d on VM (QEMU+GTK loop)\n",
                   CurW, CurH, BestW, BestH);
-            if (HasCfgTarget && CfgMatched) {
-                Print(L"ToyBoot: THEME.CFG %dx%d — quit QEMU and relaunch ./run-split.sh\n",
-                      CfgW, CfgH);
+            if (HasCfgTarget) {
+                Print(L"ToyBoot: THEME.CFG wants %dx%d but GOP is %dx%d\n",
+                      CfgW, CfgH, CurW, CurH);
+                Print(L"ToyBoot: quit QEMU window, then ./run-split.sh (edid from THEME.CFG)\n");
             }
         } else {
             Status = Gop->SetMode(Gop, BestMode);
@@ -594,9 +595,17 @@ STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConf
     VideoConfig->VerticalResolution = Gop->Mode->Info->VerticalResolution;
     VideoConfig->PixelsPerScanLine = Gop->Mode->Info->PixelsPerScanLine;
 
-    if (HasCfgTarget && CfgMatched) {
+    if (HasCfgTarget && CfgMatched &&
+        VideoConfig->HorizontalResolution == CfgW &&
+        VideoConfig->VerticalResolution == CfgH) {
         Print(L"ToyBoot: display %dx%d (THEME.CFG)\n",
               VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution);
+    } else if (HasCfgTarget &&
+               (VideoConfig->HorizontalResolution != CfgW ||
+                VideoConfig->VerticalResolution != CfgH)) {
+        Print(L"ToyBoot: display %dx%d (GOP; THEME.CFG %dx%d not applied — relaunch QEMU)\n",
+              VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution,
+              CfgW, CfgH);
     } else if (InVm) {
         Print(L"ToyBoot: display %dx%d (QEMU/VM)\n",
               VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution);
