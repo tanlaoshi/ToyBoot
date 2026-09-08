@@ -49,6 +49,7 @@ GOP path: firmware GOP → ToyBoot mode pick (VM table vs EDID on real hardware)
 Known gaps (storage / keyboard / no COM1 / NIC) and per-machine notes:
 
 → [`ToyKernel/HAL/X64/NOTES-UEFI-PC.md`](../ToyKernel/HAL/X64/NOTES-UEFI-PC.md)  
+→ smoke checklist: [`ToyKernel/Documents/真机冒烟清单.md`](../ToyKernel/Documents/真机冒烟清单.md)（**PR-PC-smoke**）  
 → roadmap **1.3c** (`Documents/路线图.md`)
 
 Do **not** mix Duo S / Board-package work (**1.3b**) into ToyBoot PRs.
