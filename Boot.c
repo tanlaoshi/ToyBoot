@@ -50,7 +50,7 @@ typedef struct {
 } PROGRAM_HEADER_64;
 #pragma pack()
 
-/* 虚拟机（QEMU/KVM 等）上保持窗口友好的分辨率表；真机走 EDID/最大模式 */
+/* 虚拟机（QEMU/KVM 等）用窗口友好表；真机选模见 GetAndSetVideo（THEME 优先） */
 STATIC BOOLEAN IsVirtualMachine(VOID) {
     UINT32 Eax;
     UINT32 Ebx;
@@ -175,30 +175,88 @@ STATIC UINTN ScoreModeQemu(UINT32 W, UINT32 H) {
     return 0;
 }
 
+STATIC BOOLEAN SameAspectRatio(UINT32 W, UINT32 H, UINT32 TargetW, UINT32 TargetH) {
+    if (W == 0 || H == 0 || TargetW == 0 || TargetH == 0) {
+        return FALSE;
+    }
+    /* W/H == Tw/Th  ⇔  W*Th == H*Tw（无浮点） */
+    return ((UINT64)W * (UINT64)TargetH) == ((UINT64)H * (UINT64)TargetW);
+}
+
+STATIC UINTN ManhattanDist(UINT32 W, UINT32 H, UINT32 TargetW, UINT32 TargetH) {
+    INT64 Dw = (INT64)W - (INT64)TargetW;
+    INT64 Dh = (INT64)H - (INT64)TargetH;
+
+    if (Dw < 0) {
+        Dw = -Dw;
+    }
+    if (Dh < 0) {
+        Dh = -Dh;
+    }
+    return (UINTN)Dw + (UINTN)Dh;
+}
+
+/*
+ * 相对 Target 打分（精确 → 同宽高比就近 → 其它就近）。
+ * 选模：Target = THEME.CFG（有 mode=）或 Auto 时的 EDID。
+ * Settings 列表排序：Target = EDID（与 THEME 无关）。
+ */
 STATIC UINTN ScoreModeNative(UINT32 W, UINT32 H, UINT32 TargetW, UINT32 TargetH,
                              BOOLEAN HasTarget) {
     UINTN Area = (UINTN)W * (UINTN)H;
+    UINTN Dist;
 
-    if (HasTarget) {
-        if (W == TargetW && H == TargetH) {
-            return 2000000000ULL + Area;
+    if (!HasTarget) {
+        if (W <= 7680 && H <= 4320) {
+            return Area;
         }
-        {
-            INT64 Dw = (INT64)W - (INT64)TargetW;
-            INT64 Dh = (INT64)H - (INT64)TargetH;
-            if (Dw < 0) {
-                Dw = -Dw;
+        return 0;
+    }
+    if (W == TargetW && H == TargetH) {
+        return 3000000000ULL + Area;
+    }
+    Dist = ManhattanDist(W, H, TargetW, TargetH);
+    if (Dist > 100000) {
+        Dist = 100000;
+    }
+    if (SameAspectRatio(W, H, TargetW, TargetH)) {
+        return 2000000000ULL - Dist * 1000ULL + Area / 10000ULL;
+    }
+    return 1000000000ULL - Dist * 1000ULL + Area / 10000ULL;
+}
+
+/* Settings 选项顺序：EDID 精确 → 同宽高比 → 就近（VM 用 QEMU 友好序） */
+STATIC VOID SortVideoModesForSettings(TOY_VIDEO_MODE *Modes, UINT32 Count,
+                                      BOOLEAN InVm, BOOLEAN HasEdid,
+                                      UINT32 EdidW, UINT32 EdidH) {
+    UINT32 i;
+    UINT32 j;
+
+    if (Modes == NULL || Count < 2) {
+        return;
+    }
+    for (i = 0; i + 1 < Count; i++) {
+        for (j = i + 1; j < Count; j++) {
+            UINTN Si;
+            UINTN Sj;
+            TOY_VIDEO_MODE Tmp;
+
+            if (InVm) {
+                Si = ScoreModeQemu(Modes[i].Width, Modes[i].Height);
+                Sj = ScoreModeQemu(Modes[j].Width, Modes[j].Height);
+            } else {
+                Si = ScoreModeNative(Modes[i].Width, Modes[i].Height,
+                                    EdidW, EdidH, HasEdid);
+                Sj = ScoreModeNative(Modes[j].Width, Modes[j].Height,
+                                    EdidW, EdidH, HasEdid);
             }
-            if (Dh < 0) {
-                Dh = -Dh;
+            if (Sj > Si) {
+                Tmp = Modes[i];
+                Modes[i] = Modes[j];
+                Modes[j] = Tmp;
             }
-            return (UINTN)(1500000000ULL - (UINTN)(Dw + Dh) * 1000000ULL + Area);
         }
     }
-    if (W <= 7680 && H <= 4320) {
-        return Area;
-    }
-    return 0;
 }
 
 
@@ -455,7 +513,8 @@ STATIC BOOLEAN TryLoadDisplayPref(EFI_HANDLE ImageHandle, UINT32 *OutW,
     return FALSE;
 }
 
-STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig) {
+STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig,
+                                 BOOT_CONFIG *BootConfig) {
     EFI_STATUS                            Status;
     EFI_GRAPHICS_OUTPUT_PROTOCOL          *Gop = NULL;
     UINTN                                 HandleCount = 0;
@@ -474,6 +533,12 @@ STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConf
     UINT32                                CfgW = 0;
     UINT32                                CfgH = 0;
     BOOLEAN                               CfgMatched = FALSE;
+    UINT32                                ModeCount = 0;
+
+    if (BootConfig != NULL) {
+        BootConfig->VideoModeCount = 0;
+        BootConfig->VideoModePad = 0;
+    }
 
     Status = gBS->LocateHandleBuffer(ByProtocol, &gEfiGraphicsOutputProtocolGuid,
                                      NULL, &HandleCount, &HandleBuffer);
@@ -520,11 +585,29 @@ STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConf
             UINT32 W = ModeInfo->HorizontalResolution;
             UINT32 H = ModeInfo->VerticalResolution;
             UINTN  Score;
+            UINT32 Mi;
 
+            /* Settings 列表：去重 WxH */
+            if (BootConfig != NULL && ModeCount < TOY_VIDEO_MODE_MAX) {
+                for (Mi = 0; Mi < ModeCount; Mi++) {
+                    if (BootConfig->VideoModes[Mi].Width == W &&
+                        BootConfig->VideoModes[Mi].Height == H) {
+                        break;
+                    }
+                }
+                if (Mi == ModeCount) {
+                    BootConfig->VideoModes[ModeCount].Width = W;
+                    BootConfig->VideoModes[ModeCount].Height = H;
+                    ModeCount++;
+                }
+            }
+
+            /* 选模优先级：THEME.CFG →（无 CFG 时）EDID/QEMU 表 */
             if (HasCfgTarget && W == CfgW && H == CfgH) {
-                /* Settings 偏好绝对优先（重启后生效） */
                 Score = 5000000000ULL;
                 CfgMatched = TRUE;
+            } else if (HasCfgTarget) {
+                Score = ScoreModeNative(W, H, CfgW, CfgH, TRUE);
             } else if (InVm) {
                 Score = ScoreModeQemu(W, H);
             } else {
@@ -546,8 +629,36 @@ STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConf
         InfoSize = 0;
     }
 
+    if (BootConfig != NULL) {
+        /* 列表序 ≠ 选模：按 EDID（或 VM 友好表）排，供 Settings 罗列 */
+        SortVideoModesForSettings(BootConfig->VideoModes, ModeCount,
+                                  InVm, HasEdidTarget, EdidW, EdidH);
+        BootConfig->VideoModeCount = ModeCount;
+        Print(L"ToyBoot: %u unique GOP modes for Settings", ModeCount);
+        if (!InVm && HasEdidTarget) {
+            Print(L" (list: EDID %dx%d first)\n", EdidW, EdidH);
+        } else {
+            Print(L"\n");
+        }
+    }
+
     if (HasCfgTarget && !CfgMatched) {
-        Print(L"ToyBoot: mode %dx%d not in GOP; keeping auto pick\n", CfgW, CfgH);
+        if (SameAspectRatio(BestW, BestH, CfgW, CfgH)) {
+            Print(L"ToyBoot: mode %dx%d not in GOP; nearest same-aspect %dx%d\n",
+                  CfgW, CfgH, BestW, BestH);
+        } else {
+            Print(L"ToyBoot: mode %dx%d not in GOP; nearest %dx%d\n",
+                  CfgW, CfgH, BestW, BestH);
+        }
+    } else if (!HasCfgTarget && HasEdidTarget &&
+               (BestW != EdidW || BestH != EdidH)) {
+        if (SameAspectRatio(BestW, BestH, EdidW, EdidH)) {
+            Print(L"ToyBoot: EDID %dx%d not in GOP; nearest same-aspect %dx%d\n",
+                  EdidW, EdidH, BestW, BestH);
+        } else {
+            Print(L"ToyBoot: EDID %dx%d not in GOP; nearest %dx%d\n",
+                  EdidW, EdidH, BestW, BestH);
+        }
     }
 
     if (BestScore == 0) {
@@ -603,9 +714,15 @@ STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConf
     } else if (HasCfgTarget &&
                (VideoConfig->HorizontalResolution != CfgW ||
                 VideoConfig->VerticalResolution != CfgH)) {
-        Print(L"ToyBoot: display %dx%d (GOP; THEME.CFG %dx%d not applied — relaunch QEMU)\n",
-              VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution,
-              CfgW, CfgH);
+        if (InVm) {
+            Print(L"ToyBoot: display %dx%d (GOP; THEME.CFG %dx%d not applied — relaunch QEMU)\n",
+                  VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution,
+                  CfgW, CfgH);
+        } else {
+            Print(L"ToyBoot: display %dx%d (nearest to THEME.CFG %dx%d)\n",
+                  VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution,
+                  CfgW, CfgH);
+        }
     } else if (InVm) {
         Print(L"ToyBoot: display %dx%d (QEMU/VM)\n",
               VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution);
@@ -1062,7 +1179,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     BOOT_CONFIG BootConfig = {0};
     EFI_PHYSICAL_ADDRESS ElfBuffer = 0;
 
-    Status = GetAndSetVideo(ImageHandle, &BootConfig.VideoConfig);
+    Status = GetAndSetVideo(ImageHandle, &BootConfig.VideoConfig, &BootConfig);
     if (EFI_ERROR(Status)) return Status;
 
     {
