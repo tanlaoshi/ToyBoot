@@ -75,6 +75,15 @@ void EFIAPI BootSerialWrite(const char *Text) {
         return;
     }
     while (*Text) {
+        /*
+         * AsciiVSPrint / PrintLib 常把格式里的 '\\n' 先扩成 "\\r\\n"。
+         * 若此处再对 '\\n' 补 '\\r' → "\\r\\r\\n"：QEMU 多空行，NUC/CoolTerm 粘行、
+         * ToyKernel 横幅像没换行。裸 '\\n'（横幅 BootSerialWrite）仍在此补 '\\r'。
+         */
+        if (*Text == '\r') {
+            Text++;
+            continue;
+        }
         if (*Text == '\n') {
             BootSerialPutChar('\r');
             BootSerialPutChar('\n');
