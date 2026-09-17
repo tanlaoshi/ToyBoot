@@ -2,12 +2,15 @@
  * BootSerial.c — ToyBoot COM1 16550（PR-BOOT-log-uart）
  *
  * ExitBootServices 前可用；与 Kernel Serial 同口同波特率，无 Hal 依赖。
+ * NUC USB-UART：短 THR 超时会丢字符（尤其 '\\n'）→ 行粘连；等 THR/TEMT。
  */
 #include "BootSerial.h"
 #include <Library/PrintLib.h>
 #include <Library/BaseLib.h>
 
 #define BOOT_COM1 0x3F8u
+/* 真机/桥接器 THR 可能慢；2000 pause 不够会覆盖未发完字节 */
+#define BOOT_SERIAL_WAIT 1000000
 
 static int sSerialOk;
 
@@ -19,6 +22,14 @@ static inline UINT8 BootSerialIn8(UINT16 Port) {
     UINT8 Value;
     __asm__ volatile ("inb %1, %0" : "=a"(Value) : "Nd"(Port));
     return Value;
+}
+
+static void BootSerialWaitBit(UINT8 Mask) {
+    int Timeout = BOOT_SERIAL_WAIT;
+
+    while (Timeout-- && !(BootSerialIn8(BOOT_COM1 + 5) & Mask)) {
+        __asm__ volatile ("pause");
+    }
 }
 
 static int BootSerialProbe(void) {
@@ -51,18 +62,11 @@ int EFIAPI BootSerialPresent(void) {
 }
 
 static void BootSerialPutChar(char C) {
-    int Timeout;
-
     if (!sSerialOk) {
         return;
     }
-    if (C == '\n') {
-        BootSerialPutChar('\r');
-    }
-    Timeout = 2000;
-    while (Timeout-- && !(BootSerialIn8(BOOT_COM1 + 5) & 0x20)) {
-        __asm__ volatile ("pause");
-    }
+    /* LSR bit5 THR empty */
+    BootSerialWaitBit(0x20);
     BootSerialOut8(BOOT_COM1, (UINT8)C);
 }
 
@@ -71,7 +75,15 @@ void EFIAPI BootSerialWrite(const char *Text) {
         return;
     }
     while (*Text) {
-        BootSerialPutChar(*Text++);
+        if (*Text == '\n') {
+            BootSerialPutChar('\r');
+            BootSerialPutChar('\n');
+            /* LSR bit6 transmitter empty — 行尾刷出，避免 NUC 粘行 */
+            BootSerialWaitBit(0x40);
+        } else {
+            BootSerialPutChar(*Text);
+        }
+        Text++;
     }
 }
 

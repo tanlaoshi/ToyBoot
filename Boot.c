@@ -24,7 +24,7 @@
 #define TOY_BOOT_DEBUG 0
 #endif
 #if TOY_BOOT_DEBUG
-#define BootDbg(...) BootDbg(__VA_ARGS__)
+#define BootDbg(...) BootSerialPrintf(__VA_ARGS__)
 #else
 #define BootDbg(...) do { } while (0)
 #endif
@@ -536,7 +536,7 @@ STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConf
     BOOLEAN                               CfgMatched = FALSE;
     UINT32                                ModeCount = 0;
 
-    BootSerialPrintf("boot: GetAndSetVideo\n");
+    BootSerialPrintf("Boot: GetAndSetVideo\n");
 
     if (BootConfig != NULL) {
         BootConfig->VideoModeCount = 0;
@@ -558,21 +558,21 @@ STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConf
 
     if (TryLoadDisplayPref(ImageHandle, &CfgW, &CfgH)) {
         HasCfgTarget = TRUE;
-        BootDbg("ToyBoot: THEME.CFG mode %dx%d\n", CfgW, CfgH);
+        BootDbg("ToyBoot: THEME.CFG Mode %dx%d\n", CfgW, CfgH);
     }
 
     if (!InVm) {
         if (!EFI_ERROR(TryGetEdidPreferred(ImageHandle, HandleBuffer[0], &EdidW, &EdidH))) {
             HasEdidTarget = TRUE;
-            BootDbg("ToyBoot: monitor EDID preferred %dx%d\n", EdidW, EdidH);
+            BootDbg("ToyBoot: Monitor EDID Preferred %dx%d\n", EdidW, EdidH);
         } else {
-            BootSerialPrintf("ToyBoot: EDID unavailable, using highest GOP mode\n");
+            BootSerialPrintf("ToyBoot: EDID Unavailable, Using Highest GOP Mode\n");
         }
     } else {
-        BootDbg("ToyBoot: virtual machine detected, using QEMU-friendly mode table\n");
+        BootDbg("ToyBoot: Virtual Machine Detected, Using QEMU-Friendly Mode Table\n");
     }
 
-    BootDbg("Available video modes:\n");
+    BootDbg("Available Video Modes:\n");
     for (UINTN i = 0; i < Gop->Mode->MaxMode; i++) {
         Status = Gop->QueryMode(Gop, i, &InfoSize, &ModeInfo);
         if (EFI_ERROR(Status) || ModeInfo == NULL) {
@@ -637,9 +637,9 @@ STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConf
         SortVideoModesForSettings(BootConfig->VideoModes, ModeCount,
                                   InVm, HasEdidTarget, EdidW, EdidH);
         BootConfig->VideoModeCount = ModeCount;
-        BootDbg("ToyBoot: %u unique GOP modes for Settings", ModeCount);
+        BootDbg("ToyBoot: %u Unique GOP Modes For Settings", ModeCount);
         if (!InVm && HasEdidTarget) {
-            BootDbg(" (list: EDID %dx%d first)\n", EdidW, EdidH);
+            BootDbg(" (List: EDID %dx%d First)\n", EdidW, EdidH);
         } else {
             BootDbg("\n");
         }
@@ -647,25 +647,25 @@ STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConf
 
     if (HasCfgTarget && !CfgMatched) {
         if (SameAspectRatio(BestW, BestH, CfgW, CfgH)) {
-            BootDbg("ToyBoot: mode %dx%d not in GOP; nearest same-aspect %dx%d\n",
+            BootDbg("ToyBoot: Mode %dx%d Not In GOP; Nearest Same-Aspect %dx%d\n",
                   CfgW, CfgH, BestW, BestH);
         } else {
-            BootDbg("ToyBoot: mode %dx%d not in GOP; nearest %dx%d\n",
+            BootDbg("ToyBoot: Mode %dx%d Not In GOP; Nearest %dx%d\n",
                   CfgW, CfgH, BestW, BestH);
         }
     } else if (!HasCfgTarget && HasEdidTarget &&
                (BestW != EdidW || BestH != EdidH)) {
         if (SameAspectRatio(BestW, BestH, EdidW, EdidH)) {
-            BootDbg("ToyBoot: EDID %dx%d not in GOP; nearest same-aspect %dx%d\n",
+            BootDbg("ToyBoot: EDID %dx%d Not In GOP; Nearest Same-Aspect %dx%d\n",
                   EdidW, EdidH, BestW, BestH);
         } else {
-            BootDbg("ToyBoot: EDID %dx%d not in GOP; nearest %dx%d\n",
+            BootDbg("ToyBoot: EDID %dx%d Not In GOP; Nearest %dx%d\n",
                   EdidW, EdidH, BestW, BestH);
         }
     }
 
     if (BestScore == 0) {
-        BootDbg("ToyBoot: no usable GOP mode found\n");
+        BootDbg("ToyBoot: No Usable GOP Mode Found\n");
         return EFI_NOT_FOUND;
     }
 
@@ -680,24 +680,24 @@ STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConf
         }
 
         if (CurW == BestW && CurH == BestH) {
-            BootDbg("ToyBoot: already %dx%d, skip SetMode\n", BestW, BestH);
+            BootDbg("ToyBoot: Already %dx%d, Skip SetMode\n", BestW, BestH);
         } else if (InVm) {
             /*
              * Guest reboot / QEMU Reset 不会重读宿主 run.sh 的 edid；若此处 SetMode
              * 改分辨率，GTK 跳变会再复位，固件又回到 edid 旧模式 → 无限重启。
              * 分辨率变更请退出 QEMU 后重新 ./run-split.sh（会按 rootfs THEME.CFG 设 edid）。
              */
-            BootDbg("ToyBoot: skip SetMode %dx%d -> %dx%d on VM (QEMU+GTK loop)\n",
+            BootDbg("ToyBoot: Skip SetMode %dx%d -> %dx%d On VM (QEMU+GTK Loop)\n",
                   CurW, CurH, BestW, BestH);
             if (HasCfgTarget) {
-                BootDbg("ToyBoot: THEME.CFG wants %dx%d but GOP is %dx%d\n",
+                BootDbg("ToyBoot: THEME.CFG Wants %dx%d But GOP Is %dx%d\n",
                       CfgW, CfgH, CurW, CurH);
-                BootDbg("ToyBoot: quit QEMU window, then ./run-split.sh (edid from THEME.CFG)\n");
+                BootDbg("ToyBoot: Quit QEMU Window, Then ./run-split.sh (EDID From THEME.CFG)\n");
             }
         } else {
             Status = Gop->SetMode(Gop, BestMode);
             if (EFI_ERROR(Status)) {
-                BootSerialPrintf("ToyBoot: SetMode(%d) failed: %r\n", BestMode, Status);
+                BootSerialPrintf("ToyBoot: SetMode(%d) Failed: %r\n", BestMode, Status);
                 return Status;
             }
         }
@@ -712,33 +712,33 @@ STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConf
     if (HasCfgTarget && CfgMatched &&
         VideoConfig->HorizontalResolution == CfgW &&
         VideoConfig->VerticalResolution == CfgH) {
-        BootDbg("ToyBoot: display %dx%d (THEME.CFG)\n",
+        BootDbg("ToyBoot: Display %dx%d (THEME.CFG)\n",
               VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution);
     } else if (HasCfgTarget &&
                (VideoConfig->HorizontalResolution != CfgW ||
                 VideoConfig->VerticalResolution != CfgH)) {
         if (InVm) {
-            BootDbg("ToyBoot: display %dx%d (GOP; THEME.CFG %dx%d not applied — relaunch QEMU)\n",
+            BootDbg("ToyBoot: Display %dx%d (GOP; THEME.CFG %dx%d Not Applied — Relaunch QEMU)\n",
                   VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution,
                   CfgW, CfgH);
         } else {
-            BootDbg("ToyBoot: display %dx%d (nearest to THEME.CFG %dx%d)\n",
+            BootDbg("ToyBoot: Display %dx%d (Nearest To THEME.CFG %dx%d)\n",
                   VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution,
                   CfgW, CfgH);
         }
     } else if (InVm) {
-        BootDbg("ToyBoot: display %dx%d (QEMU/VM)\n",
+        BootDbg("ToyBoot: Display %dx%d (QEMU/VM)\n",
               VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution);
     } else if (HasEdidTarget &&
                VideoConfig->HorizontalResolution == EdidW &&
                VideoConfig->VerticalResolution == EdidH) {
-        BootDbg("ToyBoot: display %dx%d (EDID native)\n", EdidW, EdidH);
+        BootDbg("ToyBoot: Display %dx%d (EDID Native)\n", EdidW, EdidH);
     } else {
-        BootDbg("ToyBoot: display %dx%d (hardware best match)\n",
+        BootDbg("ToyBoot: Display %dx%d (Hardware Best Match)\n",
               VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution);
     }
 
-    BootDbg("Selected mode: %d, final %dx%d\n",
+    BootDbg("Selected Mode: %d, Final %dx%d\n",
           BestMode, VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution);
 
     /* 设分辨率后清屏：黑底交给 Kernel 连续滚日志（PR-BOOT-log-uart） */
@@ -752,13 +752,13 @@ STATIC EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConf
         Black.Red = 0;
         Black.Reserved = 0;
         (void)Gop->Blt(Gop, &Black, EfiBltVideoFill, 0, 0, 0, 0, W, H, 0);
-        BootSerialPrintf("boot: gop cleared %ux%u\n", (UINT32)W, (UINT32)H);
+        BootSerialPrintf("Boot: GOP Cleared %ux%u\n", (UINT32)W, (UINT32)H);
     }
 
     if (HandleBuffer != NULL) {
         gBS->FreePool(HandleBuffer);
     }
-    BootSerialPrintf("boot: GetAndSetVideo done\n");
+    BootSerialPrintf("Boot: GetAndSetVideo Done\n");
     return EFI_SUCCESS;
 }
 // ============================================================
@@ -851,7 +851,7 @@ STATIC EFI_STATUS ReadKernelFile(EFI_HANDLE ImageHandle, EFI_PHYSICAL_ADDRESS *O
     UINTN i;
     UINTN Pass;
 
-    BootSerialPrintf("boot: ReadKernelFile\n");
+    BootSerialPrintf("Boot: ReadKernelFile\n");
 
     if (OutSize != NULL) {
         *OutSize = 0;
@@ -902,11 +902,11 @@ STATIC EFI_STATUS ReadKernelFile(EFI_HANDLE ImageHandle, EFI_PHYSICAL_ADDRESS *O
             Status = OpenKernelOnFs(Fs, OutBuffer, OutSize);
             if (!EFI_ERROR(Status)) {
                 if (Pass == 0) {
-                    BootDbg("ToyBoot: Kernel.elf from TOYOS volume\n");
+                    BootDbg("ToyBoot: Kernel.elf From TOYOS Volume\n");
                 } else if (Pass == 1) {
-                    BootDbg("ToyBoot: Kernel.elf from secondary volume\n");
+                    BootDbg("ToyBoot: Kernel.elf From Secondary Volume\n");
                 } else {
-                    BootDbg("ToyBoot: Kernel.elf from boot volume\n");
+                    BootDbg("ToyBoot: Kernel.elf From Boot Volume\n");
                 }
                 if (Handles != NULL) {
                     gBS->FreePool(Handles);
@@ -919,7 +919,7 @@ STATIC EFI_STATUS ReadKernelFile(EFI_HANDLE ImageHandle, EFI_PHYSICAL_ADDRESS *O
     if (Handles != NULL) {
         gBS->FreePool(Handles);
     }
-    BootSerialPrintf("ToyBoot: Kernel.elf not found on any volume\n");
+    BootSerialPrintf("ToyBoot: Kernel.elf Not Found On Any Volume\n");
     return EFI_NOT_FOUND;
 }
 
@@ -939,7 +939,7 @@ STATIC EFI_STATUS CheckAndLoadKernel(EFI_PHYSICAL_ADDRESS ElfBase, UINTN FileSiz
     EFI_STATUS Status;
     UINT64 PhEnd;
 
-    BootSerialPrintf("boot: CheckAndLoadKernel size=%lu\n", (UINT64)FileSize);
+    BootSerialPrintf("Boot: CheckAndLoadKernel Size=%lu\n", (UINT64)FileSize);
 
     if (FileSize < sizeof(ELF_HEADER_64)) {
         return EFI_UNSUPPORTED;
@@ -950,7 +950,7 @@ STATIC EFI_STATUS CheckAndLoadKernel(EFI_PHYSICAL_ADDRESS ElfBase, UINTN FileSiz
 
     Hdr = (ELF_HEADER_64 *)(UINTN)ElfBase;
     if (Hdr->Machine != EM_X86_64) {
-        BootSerialPrintf("ToyBoot: bad ELF machine 0x%x\n", Hdr->Machine);
+        BootSerialPrintf("ToyBoot: Bad ELF Machine 0x%x\n", Hdr->Machine);
         return EFI_UNSUPPORTED;
     }
     if (Hdr->PHeadSize < sizeof(PROGRAM_HEADER_64) || Hdr->PHeadCount == 0) {
@@ -973,12 +973,12 @@ STATIC EFI_STATUS CheckAndLoadKernel(EFI_PHYSICAL_ADDRESS ElfBase, UINTN FileSiz
             continue;
         }
         if (Ph->Offset >= FileSize || Ph->SizeInFile > FileSize - Ph->Offset) {
-            BootSerialPrintf("ToyBoot: PT_LOAD out of file\n");
+            BootSerialPrintf("ToyBoot: PT_LOAD Out Of File\n");
             return EFI_UNSUPPORTED;
         }
         SegEnd = Ph->PAddress + Ph->SizeInMemory;
         if (SegEnd < Ph->PAddress) {
-            BootSerialPrintf("ToyBoot: PT_LOAD address wrap\n");
+            BootSerialPrintf("ToyBoot: PT_LOAD Address Wrap\n");
             return EFI_UNSUPPORTED;
         }
         if (Low > Ph->PAddress) {
@@ -998,19 +998,19 @@ STATIC EFI_STATUS CheckAndLoadKernel(EFI_PHYSICAL_ADDRESS ElfBase, UINTN FileSiz
 
         /* ceil(Span/4096)；防 Span 过大导致 PageCount 回绕 */
         if (Span > (~(UINT64)0 - 0xFFFULL)) {
-            BootSerialPrintf("ToyBoot: page count wrap\n");
+            BootSerialPrintf("ToyBoot: Page Count Wrap\n");
             return EFI_UNSUPPORTED;
         }
         PageCount = (UINTN)((Span + 0xFFFULL) >> 12);
         if (PageCount == 0 || (UINT64)PageCount != ((Span + 0xFFFULL) >> 12)) {
-            BootSerialPrintf("ToyBoot: page count wrap\n");
+            BootSerialPrintf("ToyBoot: Page Count Wrap\n");
             return EFI_UNSUPPORTED;
         }
     }
     LoadBase = Low;
     Status = gBS->AllocatePages(AllocateAddress, EfiLoaderCode, PageCount, &LoadBase);
     if (EFI_ERROR(Status)) {
-        BootSerialPrintf("AllocatePages(0x%lx, %lu pages) failed: %r\n", Low, PageCount, Status);
+        BootSerialPrintf("AllocatePages(0x%lx, %lu Pages) Failed: %r\n", Low, PageCount, Status);
         return Status;
     }
 
@@ -1030,7 +1030,7 @@ STATIC EFI_STATUS CheckAndLoadKernel(EFI_PHYSICAL_ADDRESS ElfBase, UINTN FileSiz
     }
 
     *EntryPoint = Hdr->Entry;
-    BootDbg("Kernel loaded at 0x%lx, entry 0x%lx\n", LoadBase, *EntryPoint);
+    BootDbg("Kernel Loaded At 0x%lx, Entry 0x%lx\n", LoadBase, *EntryPoint);
     return EFI_SUCCESS;
 }
 
@@ -1059,7 +1059,7 @@ STATIC EFI_STATUS JumpToKernel(EFI_HANDLE ImageHandle, BOOT_CONFIG *BootConfig) 
     UINTN Tries;
     UINTN Needed;
 
-    BootSerialPrintf("boot: JumpToKernel entry=0x%lx\n",
+    BootSerialPrintf("Boot: JumpToKernel Entry=0x%lx\n",
                      (UINT64)BootConfig->KernelEntry);
 
     Status = gBS->GetMemoryMap(&MemoryMap.MapSize, NULL, &MapKey,
@@ -1120,7 +1120,7 @@ STATIC EFI_STATUS JumpToKernel(EFI_HANDLE ImageHandle, BOOT_CONFIG *BootConfig) 
         /* 失败则下一轮重新 GetMemoryMap（仍可调用 Boot Services） */
     }
 
-    BootSerialPrintf("ExitBootServices failed after retries: %r\n", Status);
+    BootSerialPrintf("ExitBootServices Failed After Retries: %r\n", Status);
     gBS->FreePool(MemoryMap.Buffer);
     return Status;
 }
@@ -1208,14 +1208,14 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
     BootSerialInitialize();
     BootSerialWrite("ToyBoot\n");
     if (BootSerialPresent()) {
-        BootSerialWrite("[COM1]:初始化OK\n");
+        BootSerialWrite("COM1 Serial OK\n");
     } else {
-        BootSerialWrite("[COM1]:unavailable\n");
+        BootSerialWrite("COM1 Unavailable\n");
     }
 
     Status = GetAndSetVideo(ImageHandle, &BootConfig.VideoConfig, &BootConfig);
     if (EFI_ERROR(Status)) {
-        BootSerialPrintf("boot: GetAndSetVideo failed: %r\n", Status);
+        BootSerialPrintf("Boot: GetAndSetVideo Failed: %r\n", Status);
         return Status;
     }
 
@@ -1223,22 +1223,22 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
         UINTN ElfSize = 0;
         Status = ReadKernelFile(ImageHandle, &ElfBuffer, &ElfSize);
         if (EFI_ERROR(Status)) {
-            BootSerialPrintf("boot: ReadKernelFile failed: %r\n", Status);
+            BootSerialPrintf("Boot: ReadKernelFile Failed: %r\n", Status);
             return Status;
         }
 
-        BootSerialPrintf("boot: loading kernel ELF...\n");
+        BootSerialPrintf("Boot: Loading Kernel ELF...\n");
         Status = CheckAndLoadKernel(ElfBuffer, ElfSize, &BootConfig.KernelEntry);
         if (EFI_ERROR(Status)) {
-            BootSerialPrintf("boot: CheckAndLoadKernel failed: %r\n", Status);
+            BootSerialPrintf("Boot: CheckAndLoadKernel Failed: %r\n", Status);
             return Status;
         }
-        BootSerialPrintf("boot: kernel loaded, entry 0x%lx\n", BootConfig.KernelEntry);
+        BootSerialPrintf("Boot: Kernel Loaded, Entry=0x%lx\n", BootConfig.KernelEntry);
     }
 
     Status = GetRsdpAddress(&BootConfig.RsdpAddress);
     if (EFI_ERROR(Status)) {
-        BootSerialPrintf("boot: ACPI RSDP not found (continue)\n");
+        BootSerialPrintf("Boot: ACPI RSDP Not Found (Continue)\n");
         BootConfig.RsdpAddress = 0;
     }
 
@@ -1252,7 +1252,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable
         BootDbg("[Boot] XHCI not found, setting to 0\n");
     }
     BootDbg("[Boot] BOOT_CONFIG.XhciBaseAddress = 0x%016lx\n", BootConfig.XhciBaseAddress);
-    BootSerialPrintf("boot: ExitBootServices + jump 0x%lx\n", BootConfig.KernelEntry);
+    BootSerialPrintf("Boot: ExitBootServices + Jump 0x%lx\n", BootConfig.KernelEntry);
 
     return JumpToKernel(ImageHandle, &BootConfig);
 }
