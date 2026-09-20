@@ -45,5 +45,6 @@ EFI_STATUS ReadKernelFile(EFI_HANDLE ImageHandle, EFI_PHYSICAL_ADDRESS *OutBuffe
                           UINTN *OutSize);
 EFI_STATUS CheckAndLoadKernel(EFI_PHYSICAL_ADDRESS ElfBase, UINTN FileSize,
                               EFI_PHYSICAL_ADDRESS *EntryPoint);
+EFI_STATUS GetXhciBaseAddress(UINT64 *XhciBase);
 
 #endif

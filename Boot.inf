@@ -14,6 +14,7 @@
   BootVideoTheme.c
   BootKernel.c
   BootKernelLoad.c
+  BootPci.c
 
 [Packages]
   MdePkg/MdePkg.dec
