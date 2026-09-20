@@ -20,7 +20,8 @@ source edksetup.sh
 build -a X64 -p ToyBoot/Boot.dsc -t GCC -D TOY_BOOT_DEBUG="$DEBUG"
 
 EFI_OUT="$EDK2_ROOT/Build/ToyBoot/DEBUG_GCC/X64/ToyBoot.efi"
-IMG_DIR="$EDK2_ROOT/ToyImage/EFI/BOOT"
+# 镜像布局：Esp/$HAL/EFI/BOOT（见 ToyImage Scripts/）
+IMG_DIR="$EDK2_ROOT/ToyImage/Esp/X64/EFI/BOOT"
 
 if [ ! -f "$EFI_OUT" ]; then
     echo "Build failed: $EFI_OUT not found"
