@@ -12,6 +12,8 @@
   BootVideoScore.c
   BootVideoEdid.c
   BootVideoTheme.c
+  BootKernel.c
+  BootKernelLoad.c
 
 [Packages]
   MdePkg/MdePkg.dec

@@ -41,5 +41,9 @@ BOOLEAN TryLoadDisplayPref(EFI_HANDLE ImageHandle, UINT32 *OutW, UINT32 *OutH);
 BOOLEAN FsHasToyOsId(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs);
 EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig,
                           BOOT_CONFIG *BootConfig);
+EFI_STATUS ReadKernelFile(EFI_HANDLE ImageHandle, EFI_PHYSICAL_ADDRESS *OutBuffer,
+                          UINTN *OutSize);
+EFI_STATUS CheckAndLoadKernel(EFI_PHYSICAL_ADDRESS ElfBase, UINTN FileSize,
+                              EFI_PHYSICAL_ADDRESS *EntryPoint);
 
 #endif
