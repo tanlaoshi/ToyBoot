@@ -36,6 +36,7 @@ EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig,
     if (BootConfig != NULL) {
         BootConfig->VideoModeCount = 0;
         BootConfig->VideoModePad = 0;
+        BootConfig->GopProtocol = 0;
     }
 
     Status = gBS->LocateHandleBuffer(ByProtocol, &gEfiGraphicsOutputProtocolGuid,
@@ -96,6 +97,8 @@ EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig,
                 if (Mi == ModeCount) {
                     BootConfig->VideoModes[ModeCount].Width = W;
                     BootConfig->VideoModes[ModeCount].Height = H;
+                    BootConfig->VideoModes[ModeCount].ModeNumber = (UINT32)i;
+                    BootConfig->VideoModes[ModeCount].Reserved = 0;
                     ModeCount++;
                 }
             }
@@ -235,6 +238,12 @@ EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig,
 
     BootDbg("Selected Mode: %d, Final %dx%d\n",
           BestMode, VideoConfig->HorizontalResolution, VideoConfig->VerticalResolution);
+
+    if (BootConfig != NULL) {
+        BootConfig->VideoModeCount = ModeCount;
+        BootConfig->GopProtocol = (UINT64)(UINTN)Gop;
+        BootConfig->VideoModePad = TOY_BOOT_GOP_HANDOFF_MAGIC;
+    }
 
     /* 设分辨率后清屏：黑底交给 Kernel 连续滚日志（PR-BOOT-log-uart） */
     if (Gop != NULL && Gop->Mode != NULL && Gop->Mode->Info != NULL) {
