@@ -68,6 +68,27 @@ EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig,
         BootDbg("ToyBoot: Virtual Machine Detected, Using QEMU-Friendly Mode Table\n");
     }
 
+    /*
+     * PR-BOOT-fast-4：无 mode= 时优先沿用固件当前可用模式。
+     * 勿为「EDID 原生 / 最高像素」再 SetMode（4K 切模贵）；有 mode= 仍尊重。
+     */
+    {
+        UINT32 CurW = 0;
+        UINT32 CurH = 0;
+
+        if (Gop->Mode != NULL && Gop->Mode->Info != NULL) {
+            CurW = Gop->Mode->Info->HorizontalResolution;
+            CurH = Gop->Mode->Info->VerticalResolution;
+        }
+        if (!HasCfgTarget && CurW >= 640 && CurH >= 480) {
+            BestMode = (UINTN)Gop->Mode->Mode;
+            BestW = CurW;
+            BestH = CurH;
+            BestScore = 6000000000ULL;
+            BootDbg("ToyBoot: Keep Firmware Mode %dx%d (No mode=)\n", CurW, CurH);
+        }
+    }
+
     BootDbg("Available Video Modes:\n");
     for (UINTN i = 0; i < Gop->Mode->MaxMode; i++) {
         Status = Gop->QueryMode(Gop, i, &InfoSize, &ModeInfo);
@@ -103,12 +124,18 @@ EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig,
                 }
             }
 
-            /* 选模优先级：THEME.CFG →（无 CFG 时）EDID/QEMU 表 */
+            /*
+             * 选模：有 mode= → THEME；无 mode= 且已 Keep 当前 → 列表仍扫、不改 Best；
+             * 否则 VM 友好表 / EDID。
+             */
             if (HasCfgTarget && W == CfgW && H == CfgH) {
                 Score = 5000000000ULL;
                 CfgMatched = TRUE;
             } else if (HasCfgTarget) {
                 Score = ScoreModeNative(W, H, CfgW, CfgH, TRUE);
+            } else if (BestScore >= 6000000000ULL) {
+                /* 已选定固件当前模式；仅填 Settings 列表 */
+                Score = 0;
             } else if (InVm) {
                 Score = ScoreModeQemu(W, H);
             } else {
@@ -178,7 +205,8 @@ EFI_STATUS GetAndSetVideo(EFI_HANDLE ImageHandle, VIDEO_CONFIG *VideoConfig,
         }
 
         if (CurW == BestW && CurH == BestH) {
-            BootDbg("ToyBoot: Already %dx%d, Skip SetMode\n", BestW, BestH);
+            /* 已匹配 / Keep 固件：跳过 SetMode（PR-BOOT-fast-4） */
+            BootSerialPrintf("ToyBoot: Already %dx%d, Skip SetMode\n", BestW, BestH);
         } else if (InVm) {
             /*
              * Guest reboot / QEMU Reset 不会重读宿主 run.sh 的 edid；若此处 SetMode
