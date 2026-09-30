@@ -27,6 +27,21 @@ menuentry "ToyOS" {
 }
 ```
 
+## Source layout
+
+```
+ToyBoot/
+├── Boot.c BootKernel*.c BootPci.c BootSerial.*   # 入口 / 装载 / PCI / 串口
+├── BootPrivate.h BootHandoff.h                   # 模块间契约
+├── Video/                                        # GOP 选模 / EDID / 打分 / THEME
+│   ├── BootVideo.c
+│   ├── BootVideoEdid.c
+│   ├── BootVideoScore.c
+│   └── BootVideoTheme.c
+├── Boot.inf  Boot.dsc  build.sh
+└── README.md
+```
+
 ## Build
 
 ```bash

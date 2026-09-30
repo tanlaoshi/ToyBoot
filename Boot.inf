@@ -8,10 +8,10 @@
 [Sources]
   Boot.c
   BootSerial.c
-  BootVideo.c
-  BootVideoScore.c
-  BootVideoEdid.c
-  BootVideoTheme.c
+  Video/BootVideo.c
+  Video/BootVideoScore.c
+  Video/BootVideoEdid.c
+  Video/BootVideoTheme.c
   BootKernel.c
   BootKernelLoad.c
   BootPci.c
