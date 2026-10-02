@@ -44,10 +44,22 @@ else
 fi
 
 cd "$EDK2_ROOT"
+# 勿沿用旧机 Conf/BuildEnv.sh 里写死的 EDK_TOOLS_PATH（拷机后常指向不存在的备份树）
+unset EDK_TOOLS_PATH
+if [ -d "$EDK2_ROOT/BaseTools" ]; then
+    export EDK_TOOLS_PATH="$EDK2_ROOT/BaseTools"
+fi
 # shellcheck disable=SC1091
 source edksetup.sh
 
-build -a X64 -p ToyBoot/Boot.dsc -t GCC -D TOY_BOOT_DEBUG="$DEBUG"
+if ! command -v build >/dev/null 2>&1; then
+    echo "error: edksetup 后仍无 build（检查 $EDK2_ROOT/BaseTools/BinWrappers/PosixLike）" >&2
+    echo "hint: 删掉过期 Conf/BuildEnv.sh 后重试；或 make -C \"\$EDK_TOOLS_PATH/Source/C\"" >&2
+    exit 1
+fi
+
+# command：避开外层 source Scripts/env.sh 时可能 export -f 的同名函数
+command build -a X64 -p ToyBoot/Boot.dsc -t GCC -D TOY_BOOT_DEBUG="$DEBUG"
 
 EFI_OUT="$EDK2_ROOT/Build/ToyBoot/DEBUG_GCC/X64/ToyBoot.efi"
 if [ -n "${TOYOS_ROOT:-}" ] && [ -d "${TOYOS_ROOT}/ToyImage" ]; then
