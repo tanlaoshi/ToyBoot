@@ -5,8 +5,9 @@ cd "$SCRIPT_DIR"
 
 # 用法: ./build.sh          # 关闭调试输出（默认）
 #       ./build.sh DEBUG=1  # 打开 BootDbg 日志
-# BOX-5：TOYOS_ROOT + EDK2_SRC（Config.local）时可在 ~/ToyOS/ToyBoot 下编，
+# BOX-5：TOYOS_ROOT + EDK2_SRC（Scripts/Config.local.txt）时可在 ~/ToyOS/ToyBoot 下编，
 #        实际 edksetup/包路径仍走备份 EDK2；EFI 装到 $TOYOS_ROOT/ToyImage。
+# 产物：EDK WORKSPACE 下 Build/ToyBoot；有 TOYOS_ROOT 时再挂到 $TOYOS_ROOT/Build/ToyBoot。
 DEBUG=0
 for Arg in "$@"; do
     case "$Arg" in
@@ -15,9 +16,20 @@ for Arg in "$@"; do
     esac
 done
 
-if [ -n "${TOYOS_ROOT:-}" ] && [ -f "${TOYOS_ROOT}/Config.local.txt" ]; then
-    # shellcheck disable=SC1090
-    . "${TOYOS_ROOT}/Config.local.txt"
+if [ -n "${TOYOS_ROOT:-}" ]; then
+    if [ -f "${TOYOS_ROOT}/Scripts/Config.local.txt" ]; then
+        # shellcheck disable=SC1090
+        . "${TOYOS_ROOT}/Scripts/Config.local.txt"
+    elif [ -f "${TOYOS_ROOT}/Config.local.txt" ]; then
+        # shellcheck disable=SC1090
+        . "${TOYOS_ROOT}/Config.local.txt"
+    fi
+fi
+
+if [ -z "${TOYOS_ROOT:-}" ] && [ -d "$SCRIPT_DIR/../ToyKernel" ] && \
+   { [ -d "$SCRIPT_DIR/../Scripts" ] || [ -f "$SCRIPT_DIR/../Config.txt" ]; }; then
+    TOYOS_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+    export TOYOS_ROOT
 fi
 
 if [ -n "${TOYOS_ROOT:-}" ] && [ -f "${TOYOS_ROOT}/EDK2/edksetup.sh" ]; then
@@ -47,6 +59,21 @@ fi
 if [ ! -f "$EFI_OUT" ]; then
     echo "Build failed: $EFI_OUT not found"
     exit 1
+fi
+
+# 树根 Build/ToyBoot：与 Kernel 并列展示
+if [ -n "${TOYOS_ROOT:-}" ]; then
+    EDK_BOOT_BUILD="$(cd "$(dirname "$EFI_OUT")/../.." && pwd)"
+    mkdir -p "${TOYOS_ROOT}/Build"
+    DEST_BOOT="${TOYOS_ROOT}/Build/ToyBoot"
+    if [ "$EDK_BOOT_BUILD" = "$DEST_BOOT" ]; then
+        :
+    elif [ -L "$DEST_BOOT" ] || [ ! -e "$DEST_BOOT" ]; then
+        ln -sfn "$EDK_BOOT_BUILD" "$DEST_BOOT"
+        echo "BUILDDIR=$DEST_BOOT → $EDK_BOOT_BUILD"
+    else
+        echo "note: $DEST_BOOT exists; EDK output at $EDK_BOOT_BUILD"
+    fi
 fi
 
 mkdir -p "$IMG_DIR"
